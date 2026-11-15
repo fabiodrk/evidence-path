@@ -90,6 +90,12 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in {f'http://{h}' for h in hosts}:raise AccessError('Cross-origin requests are disabled.')
 
     def respond(self,status,data,ctype='application/json; charset=utf-8',extra=None):
+        if getattr(self,'_defer_response',False):
+            self._pending_response=(status,data,ctype,extra)
+            return
+        self._write_response(status,data,ctype,extra)
+
+    def _write_response(self,status,data,ctype='application/json; charset=utf-8',extra=None):
         body=data.encode('utf-8') if isinstance(data,str) else data
         self.send_response(status)
         self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
@@ -138,6 +144,10 @@ class Handler(BaseHTTPRequestHandler):
         return a
 
     def safe_call(self,fn):
+        # Handlers return responses from inside transaction contexts. Wait until
+        # those contexts commit (or roll back) before sending anything to clients.
+        self._defer_response=True
+        self._pending_response=None
         try:self.check_host();fn()
         except AuthError as ex:self.json({'error':str(ex)},401)
         except AccessError as ex:self.json({'error':str(ex)},403)
@@ -147,6 +157,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as ex:
             print('Request error:',type(ex).__name__,str(ex),flush=True)
             self.json({'error':'The request could not be completed. Your last saved record remains available.'},500)
+        finally:
+            self._defer_response=False
+        if self._pending_response is not None:
+            self._write_response(*self._pending_response)
 
     def do_GET(self):self.safe_call(self.get)
     def do_POST(self):self.safe_call(self.post)
@@ -489,3 +503,4 @@ def main():
     finally:server.server_close()
 
 if __name__=='__main__':main()
+

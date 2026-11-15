@@ -193,4 +193,36 @@ class AppTest(unittest.TestCase):
             self.assertEqual(r['mode'],'Offline structured guidance');self.assertIn('did not respond',r['notice'])
         _,r=self.candidate.request('/api/application/'+self.a['id']);self.assertEqual(r['application']['review'],{})
 
+class TransactionResponseTests(unittest.TestCase):
+    def test_response_waits_for_transaction_commit(self):
+        from contextlib import contextmanager
+        events=[]
+        handler=object.__new__(app.Handler)
+        handler.check_host=lambda:None
+        handler._write_response=lambda *args:events.append('response')
+        @contextmanager
+        def transaction():
+            yield
+            events.append('commit')
+        def action():
+            with transaction():
+                handler.json({'saved':True})
+                self.assertEqual(events,[])
+        handler.safe_call(action)
+        self.assertEqual(events,['commit','response'])
+
+    def test_failed_transaction_replaces_queued_success(self):
+        handler=object.__new__(app.Handler)
+        handler.check_host=lambda:None
+        responses=[]
+        handler._write_response=lambda *args:responses.append(args)
+        def action():
+            handler.json({'saved':True})
+            raise RuntimeError('Transaction failed')
+        handler.safe_call(action)
+        self.assertEqual(len(responses),1)
+        self.assertEqual(responses[0][0],409)
+        self.assertNotIn('saved',json.loads(responses[0][1]))
+
 if __name__=='__main__':unittest.main(verbosity=2)
+
